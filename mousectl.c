@@ -481,8 +481,6 @@ static struct mode_spec *mode_spec_for_pid(unsigned short pid) {
 static int maximum_polling_index(const struct device_status *device) {
     enum device_mode mode = device == NULL ? MODE_NONE : device->mode;
     const struct mode_spec *spec = mode_spec(mode);
-    /* A mode whose cap comes from status must not use its baseline as a
-     * measured limit before the first valid capability report. */
     if (device != NULL && device->available && spec != NULL &&
         spec->polling_cap_from_status && !device->max_polling_valid) {
         return -1;
@@ -577,7 +575,6 @@ static void drain_input_reports(hid_device *handle) {
 }
 
 static int response_is_ack(const unsigned char *response, int length) {
-    /* GamingMS tests only response byte 1. */
     return length >= 2 && response[1] != 0;
 }
 
@@ -590,8 +587,6 @@ static enum transfer_result send_report_once(hid_device *handle,
     for (int attempt = 0; attempt < ACK_READ_RETRIES; ++attempt) {
         report[2] = next_transaction_id();
         report[4] = 0;
-        /* GamingMS always checksums bytes 0..31. The lighting transfer has
-         * one extra transport byte, which is not part of the checksum. */
         report[4] = checksum(report, REPORT_SIZE);
 
         int written = hid_send_feature_report(handle, report, report_size);
@@ -601,8 +596,6 @@ static enum transfer_result send_report_once(hid_device *handle,
 
         unsigned char response[REPORT_SIZE] = {0};
         response[0] = 0x06;
-        /* cmd10 waits 120 ms after every send; all other commands wait
-         * 60 ms.  Failed reads add a separate 60 ms retry backoff below. */
         usleep(first_ack_delay_us);
 
         int length = hid_get_feature_report(handle, response, sizeof(response));
@@ -734,7 +727,6 @@ static int decode_status_report(const unsigned char *report, int length,
     status->active_level = status->active_level_valid ? report[2] : -1;
     status->polling_valid = polling_index >= 0;
     status->polling_hz = polling_index >= 0 ? polling_options[polling_index].hz : 0;
-    /* Only the three effects proven useful on this mouse are exposed. */
     int lighting_index = lighting_index_from_protocol_id(report[6]);
     status->lighting_mode_valid = lighting_index >= 0;
     status->lighting_mode_index = lighting_index;
@@ -743,8 +735,6 @@ static int decode_status_report(const unsigned char *report, int length,
     if (spec != NULL && spec->polling_cap_from_status) {
         int maximum_polling_hz = polling_capacity_to_hz(report[8]);
         if (maximum_polling_hz > 0) {
-            /* Unknown selector values leave a cap learned from an earlier
-             * queued report intact. */
             status->max_polling_hz = maximum_polling_hz;
             status->max_polling_valid = 1;
         }
@@ -809,8 +799,6 @@ static int read_live_status(struct device_status *status) {
     status->battery_percent = -1;
     unsigned int presence = detect_transports();
 
-    /* Table order defines priority.  Every mode uses the same status path;
-     * the table says whether enumeration alone proves a live connection. */
     for (int i = 0; i < MODE_SPEC_COUNT; ++i) {
         struct mode_spec *spec = &mode_specs[i];
         if ((presence & (1u << spec->mode)) == 0) {
@@ -881,9 +869,6 @@ static enum transfer_result save_dpi_axis(const int dpi[DPI_LEVELS],
 static void build_dpi_color_report(
         const uint32_t colors[DPI_COLOR_REPORT_SLOTS],
         unsigned char report[REPORT_SIZE]) {
-    /* GamingMS FUN_00437080, 004379fc-00437bad: command 03 carries eight
-     * independent RGB slots. Profile values are written as #RRGGBB, while
-     * the packet stores the component bytes in R, G, B order. */
     memset(report, 0, REPORT_SIZE);
     report[0] = 0x06;
     report[1] = 0x03;
@@ -918,7 +903,6 @@ static enum transfer_result save_polling(int polling_index) {
 
 static void build_lod_report(int lod_mm,
                              unsigned char report[REPORT_SIZE]) {
-    /* GamingMS FUN_00437080: command 05, LiftDetectionHeight 1/2. */
     memset(report, 0, REPORT_SIZE);
     report[0] = 0x06;
     report[1] = 0x05;
@@ -938,7 +922,6 @@ static enum transfer_result save_lod(int lod_mm) {
 static void build_sensor_advanced_report(int angle_snap, int motion_sync,
                                          int ripple_control,
                                          unsigned char report[REPORT_SIZE]) {
-    /* GamingMS FUN_00438340: command 08, DD4/DD5/DD6 in UI order. */
     memset(report, 0, REPORT_SIZE);
     report[0] = 0x06;
     report[1] = 0x08;
@@ -994,13 +977,6 @@ static int build_lighting_report(const struct ui_state *state,
     report[1] = 0x06;
     report[3] = 0x01;
 
-    /* GamingMS runtime Apply path (FUN_00437080, 00437528-0043757a)
-     * clears the 25-byte lighting payload and writes only these fields:
-     *   payload[0] = 0
-     *   payload[1] = raw OEM effect identifier
-     *   payload[2] = (brightness + 1) << 4 | (speed + 1)
-     * The color-bearing buffer built by BuildProfileDeviceBuffers is only a
-     * profile cache; sending it here produces a different, invalid command. */
     unsigned char *payload = &report[5];
     payload[1] = lighting_modes[index].protocol_id;
     payload[2] =
@@ -1024,9 +1000,6 @@ static int build_power_report(int sleep_timeout_minutes,
         return 0;
     }
 
-    /* GamingMS FUN_004380d0 (0043812e-004382a7): command 07 carries the
-     * selected PowerDownTime verbatim in byte 5. The OEM selection table at
-     * 0061a3b8 contains the supported minute values 1..8. */
     memset(report, 0, REPORT_SIZE);
     report[0] = 0x06;
     report[1] = 0x07;
@@ -1205,7 +1178,6 @@ static void build_macro_reset_report(unsigned char report[REPORT_SIZE]) {
 }
 
 static enum transfer_result save_macros(const struct ui_state *state) {
-    /* Validate every payload before cmd11 clears the device macro storage. */
     for (int button = 0; button < BUTTON_COUNT; ++button) {
         if (button_uses_macro(state->buttons[button]) &&
             !button_uses_own_macro(state->buttons[button], button)) {
@@ -1421,8 +1393,6 @@ static int has_pending_settings(const struct ui_state *state) {
 
 static int load_state(struct ui_state *state) {
     reset_to_defaults(state);
-    /* Without a trustworthy local snapshot, every displayed default is
-     * staged so Save cannot silently skip values that the UI presents. */
     mark_all_settings_dirty(state);
 
     FILE *file = fopen(STATE_FILE, "r");
@@ -1770,7 +1740,6 @@ static int refresh_device(struct ui_state *state, int show_message) {
         state->lighting_mode_index = status.lighting_mode_index;
     }
 
-    /* DPI events may carry stale polling data; sync polling once per mode. */
     int polling_index = state->polling_index;
     if (status.polling_valid && !state->polling_dirty &&
         state->polling_synced_mode != status.mode) {
@@ -2105,7 +2074,6 @@ static void initialize_curses(void) {
 static struct save_result perform_save(const struct ui_state *state) {
     struct save_result result = {0};
 
-    /* Do not verify against a status report queued before these writes. */
     close_status_handle();
     last_transport_scan_ms = 0;
 
@@ -2115,8 +2083,6 @@ static struct save_result perform_save(const struct ui_state *state) {
         maximum_polling_index(&state->device) != 0;
     int dpi_changed = state->dpi_dirty || state->active_level_dirty;
 
-    /* GamingMS Apply order: cmd01, cmd02 X/Y, cmd03, cmd04, cmd05,
-     * cmd06, cmd07, cmd08, then macro data. */
     result.buttons = state->buttons_dirty ? save_buttons(state->buttons) :
                                            TRANSFER_ACKNOWLEDGED;
     if (state->buttons_dirty) usleep(BETWEEN_REPORTS_US);
@@ -2143,8 +2109,6 @@ static struct save_result perform_save(const struct ui_state *state) {
     result.lighting = state->lighting_dirty ? save_lighting(state) :
                                               TRANSFER_ACKNOWLEDGED;
     if (state->lighting_dirty) usleep(BETWEEN_REPORTS_US);
-    /* Lighting and power are independent OEM settings.  cmd07 is sent only
-     * when its own state changes, regardless of the selected light effect. */
     int power_upload_needed = state->power_dirty;
     result.power = power_upload_needed ? save_power(state) :
                                          TRANSFER_ACKNOWLEDGED;
